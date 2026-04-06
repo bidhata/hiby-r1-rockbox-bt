@@ -1,0 +1,392 @@
+From d10acf3d5628d2391935ca226f4d18528923d088 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Tue, 10 Mar 2026 23:11:10 +0000
+Subject: [PATCH] hibyr1: add bluealsa pcm backend and routing hooks
+
+---
+ firmware/SOURCES                              |   3 +
+ firmware/target/hosted/hiby/hibylinux_codec.c | 140 +++++++++++++++++-
+ firmware/target/hosted/pcm-alsa.c             |  78 ++++++++--
+ 3 files changed, 206 insertions(+), 15 deletions(-)
+
+diff --git a/firmware/SOURCES b/firmware/SOURCES
+index 195b5e0caa..549999f022 100644
+--- a/firmware/SOURCES
++++ b/firmware/SOURCES
+@@ -149,6 +149,9 @@ target/hosted/sonynwz/nwzlinux-codec.c
+ #if ((defined(HIBY_LINUX) || defined(FIIO_M3K_LINUX) || defined(SAMSUNG_YPR0) || defined(SAMSUNG_YPR1) || defined(SONY_NWZ_LINUX)) && !defined(SIMULATOR))
+ target/hosted/pcm-alsa.c
+ target/hosted/alsa-controls.c
++#if (defined(HIBY_LINUX) && !defined(SIMULATOR))
++target/hosted/hiby/pcm-alsa-hiby.c
++#endif
+ #endif
+ #endif
+ 
+diff --git a/firmware/target/hosted/hiby/hibylinux_codec.c b/firmware/target/hosted/hiby/hibylinux_codec.c
+index 656e07a6a1..e71769ef9c 100644
+--- a/firmware/target/hosted/hiby/hibylinux_codec.c
++++ b/firmware/target/hosted/hiby/hibylinux_codec.c
+@@ -32,12 +32,24 @@
+ #include "panic.h"
+ #include "sysfs.h"
+ #include "alsa-controls.h"
+-#include "pcm-alsa.h"
++#include "pcm-alsa-hiby.h"
++#include "sound.h"
++#include "settings.h"
+ 
+ #include "logf.h"
+ 
++#include <stdio.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++#include <sys/un.h>
++#include <unistd.h>
++
+ int hiby_has_valid_output(void);
+ 
++#define HIBY_SYS_SERVER_SOCKET "/var/run/sys_server"
++#define HIBY_ABSVOL_MAX 127
++
+ static int hw_init = 0;
+ 
+ static long int vol_l_hw = 255;
+@@ -45,6 +57,127 @@ static long int vol_r_hw = 255;
+ static long int last_ps = -1;
+ 
+ static int muted = -1;
++static int bt_absvol_last_step = -1;
++static char bt_absvol_last_mac[18];
++
++static int hiby_volume_to_absvol_step(int volume_cb)
++{
++    int min_vol = sound_min(SOUND_VOLUME);
++    int max_vol = sound_max(SOUND_VOLUME);
++    int limit_vol = global_settings.volume_limit;
++    int span;
++    int pct;
++    int step;
++
++    if (limit_vol < max_vol)
++        max_vol = limit_vol;
++    if (max_vol < min_vol)
++        max_vol = min_vol;
++
++    if (volume_cb < min_vol)
++        volume_cb = min_vol;
++    if (volume_cb > max_vol)
++        volume_cb = max_vol;
++
++    span = max_vol - min_vol;
++    if (span <= 0)
++        return 0;
++
++    pct = ((volume_cb - min_vol) * 100 + span / 2) / span;
++    if (pct < 0)
++        pct = 0;
++    if (pct > 100)
++        pct = 100;
++
++    step = (pct * HIBY_ABSVOL_MAX + 50) / 100;
++    if (step < 0)
++        step = 0;
++    if (step > HIBY_ABSVOL_MAX)
++        step = HIBY_ABSVOL_MAX;
++
++    return step;
++}
++
++static int hiby_sys_server_command(const char *command, char *reply, size_t reply_size)
++{
++    struct sockaddr_un addr;
++    struct timeval tv = { .tv_sec = 0, .tv_usec = 300000 };
++    int fd = -1;
++    int rc = -1;
++    ssize_t n;
++
++    if (reply && reply_size > 0)
++        reply[0] = '\0';
++
++    if (!command || !*command)
++        return -1;
++
++    fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0)
++        return -1;
++
++    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
++
++    memset(&addr, 0, sizeof(addr));
++    addr.sun_family = AF_UNIX;
++    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", HIBY_SYS_SERVER_SOCKET);
++
++    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
++        goto out;
++    if (send(fd, command, strlen(command), 0) < 0)
++        goto out;
++
++    if (reply && reply_size > 1)
++    {
++        n = recv(fd, reply, reply_size - 1, 0);
++        if (n < 0)
++            goto out;
++        reply[n] = '\0';
++    }
++
++    rc = 0;
++
++out:
++    if (fd >= 0)
++        close(fd);
++    return rc;
++}
++
++static void hiby_notify_bt_absvol(int volume_cb)
++{
++    const char *mac_u = hiby_pcm_get_bt_mac();
++    char cmd[96];
++    char reply[128];
++    int step;
++
++    if (!mac_u || !mac_u[0])
++    {
++        bt_absvol_last_step = -1;
++        bt_absvol_last_mac[0] = '\0';
++        return;
++    }
++
++    step = hiby_volume_to_absvol_step(volume_cb);
++    if (step == bt_absvol_last_step && !strcmp(mac_u, bt_absvol_last_mac))
++        return;
++
++    snprintf(cmd, sizeof(cmd), "BT:ABSVOL:%s %d", mac_u, step);
++    if (hiby_sys_server_command(cmd, reply, sizeof(reply)) < 0)
++    {
++        logf("bt absvol send fail: %s", cmd);
++        return;
++    }
++
++    if (!strstr(reply, "OK"))
++    {
++        logf("bt absvol not-ok: %s", reply);
++        return;
++    }
++
++    bt_absvol_last_step = step;
++    snprintf(bt_absvol_last_mac, sizeof(bt_absvol_last_mac), "%s", mac_u);
++}
+ 
+ void audiohw_mute(int mute)
+ {
+@@ -126,6 +259,7 @@ void audiohw_set_frequency(int fsel)
+ 
+ void audiohw_set_volume(int vol_l, int vol_r)
+ {
++    int vol_avg;
+     logf("hw vol %d %d", vol_l, vol_r);
+ 
+     long l,r;
+@@ -141,6 +275,9 @@ void audiohw_set_volume(int vol_l, int vol_r)
+ 
+     alsa_controls_set_ints("Left Playback Volume", 1, &l);
+     alsa_controls_set_ints("Right Playback Volume", 1, &r);
++
++    vol_avg = (vol_l + vol_r) / 2;
++    hiby_notify_bt_absvol(vol_avg);
+ }
+ 
+ void audiohw_set_filter_roll_off(int value)
+@@ -155,4 +292,3 @@ void audiohw_set_filter_roll_off(int value)
+     alsa_controls_set_ints("Digital Filter", 1, &value_hw);
+ 
+ }
+-
+diff --git a/firmware/target/hosted/pcm-alsa.c b/firmware/target/hosted/pcm-alsa.c
+index 9286369a25..4c6fbc085a 100644
+--- a/firmware/target/hosted/pcm-alsa.c
++++ b/firmware/target/hosted/pcm-alsa.c
+@@ -109,6 +109,10 @@ static snd_pcm_stream_t current_alsa_mode;  /* SND_PCM_STREAM_PLAYBACK / _CAPTUR
+ #endif
+ 
+ static const char *current_alsa_device;
++static void pcm_pump_locked(snd_pcm_t *handle);
++#if defined(HIBY_LINUX)
++#include "hiby/pcm-alsa-hiby-hooks.h"
++#endif
+ 
+ void pcm_alsa_set_playback_device(const char *device)
+ {
+@@ -147,6 +151,10 @@ static int set_hwparams(snd_pcm_t *handle)
+         period_size = MIX_FRAME_SAMPLES;
+     }
+ 
++#if defined(HIBY_LINUX)
++    hiby_pcm_adjust_bt_buffering(&period_size, &buffer_size, hiby_pcm_bt_active());
++#endif
++
+     /* choose all parameters */
+     err = snd_pcm_hw_params_any(handle, params);
+     if (err < 0)
+@@ -209,6 +217,11 @@ static int set_hwparams(snd_pcm_t *handle)
+ 
+     if (frames) free(frames);
+     frames = calloc(1, period_size * channels * sizeof(sample_t));
++#if defined(HIBY_LINUX)
++    hiby_pcm_poll_interval_us =
++        hiby_pcm_calc_poll_interval(real_sample_rate, period_size,
++                                    hiby_pcm_bt_active());
++#endif
+ 
+     /* write the parameters to device */
+     err = snd_pcm_hw_params(handle, params);
+@@ -228,6 +241,12 @@ error:
+ static int set_swparams(snd_pcm_t *handle)
+ {
+     int err;
++#if defined(HIBY_LINUX)
++    snd_pcm_uframes_t start_threshold =
++        hiby_pcm_start_threshold(buffer_size, period_size, hiby_pcm_bt_active());
++#else
++    snd_pcm_uframes_t start_threshold = buffer_size / 2;
++#endif
+ 
+     snd_pcm_sw_params_t *swparams;
+     snd_pcm_sw_params_malloc(&swparams);
+@@ -239,8 +258,7 @@ static int set_swparams(snd_pcm_t *handle)
+         logf("Unable to determine current swparams for playback: %s", snd_strerror(err));
+         goto error;
+     }
+-    /* start the transfer when the buffer is half full */
+-    err = snd_pcm_sw_params_set_start_threshold(handle, swparams, buffer_size / 2);
++    err = snd_pcm_sw_params_set_start_threshold(handle, swparams, start_threshold);
+     if (err < 0)
+     {
+         logf("Unable to set start threshold mode for playback: %s", snd_strerror(err));
+@@ -380,21 +398,20 @@ static bool copy_frames(bool first)
+     return true;
+ }
+ 
+-static void async_callback(snd_async_handler_t *ahandler)
++static void pcm_pump_locked(snd_pcm_t *handle)
+ {
+     int err;
+ 
+-    if (!ahandler) return;
+-
+-    snd_pcm_t *handle = snd_async_handler_get_pcm(ahandler);
+-
+-    if (!handle) return;
+-
+-    if (pthread_mutex_trylock(&pcm_mtx) != 0)
++    if (!handle)
+         return;
+ 
+     snd_pcm_state_t state = snd_pcm_state(handle);
+ 
++#if defined(HIBY_LINUX)
++    if (state == SND_PCM_STATE_OPEN || !hiby_pcm_params_ready())
++        return;
++#endif
++
+     if (state == SND_PCM_STATE_XRUN)
+     {
+         xruns++;
+@@ -493,6 +510,24 @@ static void async_callback(snd_async_handler_t *ahandler)
+     }
+ 
+ abort:
++    return;
++}
++
++static void async_callback(snd_async_handler_t *ahandler)
++{
++    snd_pcm_t *cb_handle;
++
++    if (!ahandler)
++        return;
++
++    cb_handle = snd_async_handler_get_pcm(ahandler);
++    if (!cb_handle)
++        return;
++
++    if (pthread_mutex_trylock(&pcm_mtx) != 0)
++        return;
++
++    pcm_pump_locked(cb_handle);
+     pthread_mutex_unlock(&pcm_mtx);
+ }
+ 
+@@ -501,14 +536,19 @@ static void close_hwdev(void)
+     logf("closedev (%p)", handle);
+ 
+     if (handle) {
++#if defined(HIBY_LINUX)
++        hiby_pcm_stop_poll_thread();
++#endif
+         snd_pcm_drain(handle);
+ #ifdef AUDIOHW_MUTE_ON_STOP
+         audiohw_mute(true);
+ #endif
++#if !defined(HIBY_LINUX)
+         if (ahandler) {
+             snd_async_del_handler(ahandler);
+             ahandler = NULL;
+         }
++#endif
+         snd_pcm_close(handle);
+ 
+         handle = NULL;
+@@ -530,9 +570,18 @@ static void alsadev_cleanup(void)
+ static void open_hwdev(const char *device, snd_pcm_stream_t mode)
+ {
+     int err;
++#if defined(HIBY_LINUX)
++    if (!device || !*device)
++        panicf("%s(): Invalid empty ALSA device", __func__);
++#endif
+ 
+     logf("opendev %s (%p)", device, handle);
+-
++#if defined(HIBY_LINUX)
++    if (hiby_pcm_keep_hwdev(device, mode))
++    {
++        return;
++    }
++#else
+     if (handle && device == current_alsa_device
+ #ifdef HAVE_RECORDING
+         && current_alsa_mode == mode
+@@ -541,7 +590,7 @@ static void open_hwdev(const char *device, snd_pcm_stream_t mode)
+     {
+         return;
+     }
+-
++#endif
+     /* Close old handle */
+     close_hwdev();
+ 
+@@ -550,7 +599,9 @@ static void open_hwdev(const char *device, snd_pcm_stream_t mode)
+         panicf("%s(): Cannot open device %s: %s", __func__, device, snd_strerror(err));
+     }
+     last_sample_rate = 0;
+-
++#if defined(HIBY_LINUX)
++    hiby_pcm_start_poll_thread();
++#else
+     pthread_mutexattr_t attr;
+     pthread_mutexattr_init(&attr);
+     pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+@@ -584,6 +635,7 @@ static void open_hwdev(const char *device, snd_pcm_stream_t mode)
+     {
+         panicf("Unable to install alternative signal stack: %s", strerror(err));
+     }
++#endif
+ 
+ #ifdef HAVE_RECORDING
+     current_alsa_mode = mode;
+-- 
+2.50.1 (Apple Git-155)
+

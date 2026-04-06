@@ -1,0 +1,27 @@
+From 5d8aa2d1fd8a3e8ff0fbb1d6c8f5f2c3514f1f53 Mon Sep 17 00:00:00 2001
+From: rockbox-hiby-r1-ci <ci@example.invalid>
+Date: Sun, 8 Mar 2026 19:15:00 +0000
+Subject: [PATCH 4/4] hibyr1: keep bluetooth active across bootloader handoff
+
+---
+ bootloader/hibyos_linux.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/bootloader/hibyos_linux.c b/bootloader/hibyos_linux.c
+--- a/bootloader/hibyos_linux.c
++++ b/bootloader/hibyos_linux.c
+@@ -694,10 +694,10 @@ int main(int argc, char **argv)
+         }
+         else if(mode == BOOT_ROCKBOX)
+         {
+-#if defined(HIBY_R3PROII) || defined(HIBY_R1)
+-            /* Suspend bluetooth as it's not currently supported */
++#if defined(HIBY_R3PROII)
++            /* Suspend bluetooth before booting Rockbox. */
+             system("/usr/bin/bt_suspend");
+ #endif
+             fflush(stdout);
+             mount_storage(true);
+             system("/bin/cp " BASE_DIR "/.rockbox/" BOOTFILE " /tmp");
+-- 
+2.39.5

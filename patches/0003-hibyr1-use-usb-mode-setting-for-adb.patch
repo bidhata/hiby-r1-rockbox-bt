@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Sun, 8 Mar 2026 17:50:16 +0000
+Subject: [PATCH 3/3] hibyr1: use USB mode setting for ADB
+
+
+diff --git a/firmware/target/hosted/hiby/usb-hiby-gadget.c b/firmware/target/hosted/hiby/usb-hiby-gadget.c
+index 91e178dd03aa7d6fbf993d30eb567d3fa79b14ef..8c386b126391e2f53f729a3c42e58c0f6263d930 100644
+--- a/firmware/target/hosted/hiby/usb-hiby-gadget.c
++++ b/firmware/target/hosted/hiby/usb-hiby-gadget.c
+@@ -42,7 +42,6 @@
+ 
+ static int _usb_mode = -1;
+ static bool _usb_init = false;
+-static bool is_adb_running = false;
+ 
+ void enable_adb(void);
+ void enable_mass_storage(void);
+@@ -59,12 +58,24 @@ void startup_rbhome(void);
+ #endif
+ 
+ void hiby_set_usb_mode(int mode) {
+-    logf(">>>>>>>>>>>>>>>>> hiby_set_usb_mode(%d)\n", mode);
++    bool reattach;
++
+     if (!_usb_init) {
+-        logf("Need to init usb!\n");
+         usb_init_device();
+     }
+ 
++    if (_usb_mode == mode) {
++        logf("hiby_set_usb_mode: mode unchanged (%d)\n", mode);
++        return;
++    }
++
++    logf(">>>>>>>>>>>>>>>>> hiby_set_usb_mode(%d)\n", mode);
++    reattach = (_usb_mode != -1 && usb_detect() == USB_INSERTED);
++
++    if (reattach) {
++        usb_enable(false);
++    }
++
+     switch(mode) {
+     case USB_MODE_MASS_STORAGE:
+         logf("Enabling Mass Storage\n");
+@@ -74,11 +85,19 @@ void hiby_set_usb_mode(int mode) {
+         logf("Enabling Charge\n");
+         enable_charging();
+         break;
+-    default:
++    case USB_MODE_ADB:
++        logf("Enabling ADB\n");
++        enable_adb();
+         break;
++    default:
++        return;
+     }
+ 
+     _usb_mode = mode;
++
++    if (reattach && mode != USB_MODE_CHARGE) {
++        usb_enable(true);
++    }
+ }
+ 
+ /* TODO: implement usb detection properly */
+@@ -95,12 +114,8 @@ void usb_enable(bool on)
+     logf(">>>>>>>>>>>>>>>>> usb_enable(%d)\n", on);
+     logf("usb enable %d %d\n", on, _usb_mode);
+ 
+-    /* Ignore usb enable/disable when ADB is enabled so we can fireup adb shell
+-     * without entering ums mode
+-     */
+-    //if (_usb_mode != USB_MODE_ADB) {
+-        sysfs_set_string("/sys/kernel/config/usb_gadget/adb_demo/UDC", on ? "13500000.otg_new" : "");
+-    //}
++    sysfs_set_string("/sys/kernel/config/usb_gadget/adb_demo/UDC",
++                     on ? "13500000.otg_new" : "");
+ }
+ 
+ /* This is called by usb thread after usb extract in order to return
+@@ -221,11 +236,7 @@ void enable_mass_storage(void) {
+     system("mkdir -p /sys/kernel/config/usb_gadget/adb_demo/functions/mass_storage.0/lun.0");
+     system("mkdir -p /sys/kernel/config/usb_gadget/adb_demo/configs/c.1/strings/0x409");
+ 
+-    if (is_adb_running) {
+-        sysfs_set_string("/sys/kernel/config/usb_gadget/adb_demo/configs/c.1/strings/0x409/configuration", "adb,storage");
+-    } else {
+-        sysfs_set_string("/sys/kernel/config/usb_gadget/adb_demo/configs/c.1/strings/0x409/configuration", "storage");
+-    }
++    sysfs_set_string("/sys/kernel/config/usb_gadget/adb_demo/configs/c.1/strings/0x409/configuration", "storage");
+     sysfs_set_int("/sys/kernel/config/usb_gadget/adb_demo/configs/c.1/MaxPower", 120);
+ 
+     system("ln -s /sys/kernel/config/usb_gadget/adb_demo/functions/mass_storage.0 /sys/kernel/config/usb_gadget/adb_demo/configs/c.1/");
+@@ -284,8 +295,6 @@ void usb_init_device(void)
+         return;
+     }
+ 
+-    char functions[128] = {0};
+-
+     /* Before we can do anything here we need to mount configfs */
+     int is_mounted = !system("mountpoint -q /sys/kernel/config");
+ 
+@@ -307,16 +316,6 @@ void usb_init_device(void)
+ 
+     system("mkdir -p /sys/kernel/config/usb_gadget/adb_demo/configs/c.1/strings/0x409");
+ 
+-    /* Check if ADB was activated in bootloader */
+-    logf("checking if adb is already on\n");
+-
+-    if (access("/sys/kernel/config/usb_gadget/adb_demo/configs/c.1/strings/0x409/configuration", F_OK) == 0) {
+-        logf("found usb config string!\n");
+-
+-        sysfs_get_string("/sys/kernel/config/usb_gadget/adb_demo/configs/c.1/strings/0x409/configuration", functions, sizeof(functions));
+-        is_adb_running = (strstr(functions, "adb") == NULL) ? false : true;
+-    }
+-
+     sysfs_set_string("/sys/kernel/config/usb_gadget/adb_demo/strings/0x409/manufacturer", "Rockbox.org");
+     sysfs_set_string("/sys/kernel/config/usb_gadget/adb_demo/strings/0x409/product", "Rockbox media player");
+     sysfs_set_string("/sys/kernel/config/usb_gadget/adb_demo/strings/0x409/serialnumber", "0123456789ABCDEF");

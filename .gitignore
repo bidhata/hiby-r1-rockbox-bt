@@ -1,0 +1,15 @@
+# Build artifacts
+work/
+out/
+toolchain/
+.ccache/
+
+# Logs
+*.log
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

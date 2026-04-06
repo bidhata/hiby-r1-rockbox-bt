@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.invalid>
+Date: Sun, 8 Mar 2026 17:50:16 +0000
+Subject: [PATCH 1/3] hibyr1: add bluetooth UI/menu integration
+
+
+diff --git a/apps/SOURCES b/apps/SOURCES
+index 923e979af53ba05311bc12fdca143a634c058f85..4497076397604f5b2d7b6650e47168af9e32be4b 100644
+--- a/apps/SOURCES
++++ b/apps/SOURCES
+@@ -32,6 +32,9 @@ buffering.c
+ voice_thread.c
+ rbcodec_helpers.c
+ menus/main_menu.c
++#ifdef HIBY_LINUX
++menus/hiby_bluetooth_menu.c
++#endif
+ menus/playback_menu.c
+ menus/playlist_menu.c
+ #ifdef HAVE_RECORDING
+@@ -53,6 +56,9 @@ root_menu.c
+ screens.c
+ settings.c
+ settings_list.c
++#ifdef HIBY_LINUX
++hiby_bluetooth.c
++#endif
+ shortcuts.c
+ status.c
+ cuesheet.c
+diff --git a/apps/menus/exported_menus.h b/apps/menus/exported_menus.h
+index 93cabb0f2ed5f53c098d4d951850c795792aef8b..5b12b43f7156a3ad85c6a01e407ce01a392d6fa3 100644
+--- a/apps/menus/exported_menus.h
++++ b/apps/menus/exported_menus.h
+@@ -43,6 +43,9 @@ extern const struct menu_item_ex
+         audiohw_eq_tone_controls,   /* audiohw_eq_menu.c */
+ #endif
+         radio_settings_menu,        /* radio_menu.c     */
++#ifdef HIBY_LINUX
++        hiby_bluetooth_root_item,   /* hiby_bluetooth_menu.c */
++#endif
+         theme_menu;                 /* theme_menu.c     */
+ 
+ struct browse_folder_info {
+diff --git a/apps/root_menu.c b/apps/root_menu.c
+index 4016d78a1b9998157328d4f0e8407279c4ce4038..de2712c58729ec157c64f9146a45476dada1204b 100644
+--- a/apps/root_menu.c
++++ b/apps/root_menu.c
+@@ -556,6 +556,9 @@ static struct menu_table menu_table[] = {
+     { "radio", &fm },
+ #endif
+     { "playlists", &playlists },
++#ifdef HIBY_LINUX
++    { "bluetooth", &hiby_bluetooth_root_item },
++#endif
+     { "plugins", &rocks_browser },
+     { "system_menu", &system_menu_ },
+     { "shortcuts", &shortcut_menu },
+
