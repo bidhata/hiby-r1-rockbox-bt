@@ -70,12 +70,13 @@ endif
 # expanded on the shell command line - this avoids ARG_MAX errors when the
 # build path is long (e.g. GitHub Actions).  multigcc.pl in this tree has been
 # patched to accept @FILE response-file arguments.
-mkdepfile = $(file >$(1).rsp,$(2))$(SILENT)perl $(TOOLSDIR)/multigcc.pl $(CC) $(PPCFLAGS) $(OTHER_INC) -MG -MM -include config.h -- @$(1).rsp | \
+mkdepfile_counter :=
+mkdepfile = $(eval mkdepfile_counter += 1)$(file >$(1)_$(words $(mkdepfile_counter)).rsp,$(2))$(SILENT)perl $(TOOLSDIR)/multigcc.pl $(CC) $(PPCFLAGS) $(OTHER_INC) -MG -MM -include config.h -- @$(1)_$(words $(mkdepfile_counter)).rsp | \
 	sed -e "s: lang.h: lang/lang.h:" \
 	-e 's:_asmdefs.o:_asmdefs.h:' \
 	-e "s: max_language_size.h: lang/max_language_size.h:" | \
 	$(TOOLSDIR)/addtargetdir.pl $(ROOTDIR) $(BUILDDIR) \
-	>> $(1); rm -f $(1).rsp
+	>> $(1); rm -f $(1)_$(words $(mkdepfile_counter)).rsp
 
 # function to create .bmp dependencies
 bmpdepfile = $(SILENT) \
