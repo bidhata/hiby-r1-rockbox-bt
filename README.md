@@ -11,10 +11,10 @@ This repository does **not** vendor the full Rockbox source tree. Instead, it bu
 
 ## What it adds
 
-### Bluetooth Audio (LDAC + aptX + SBC)
+### Bluetooth Audio (LDAC + aptX HD + aptX + SBC)
 
 - **Bluetooth menu** in Rockbox — scan, pair, connect, disconnect, and status
-- **Automatic codec negotiation** — prefers **LDAC** → **aptX** → **SBC** (best available)
+- **Automatic codec negotiation** — prefers **LDAC** → **aptX HD** → **aptX** → **SBC** (best available)
 - Active codec displayed in the **Status** screen
 - Playback routing to **BlueALSA A2DP** with automatic fallback to **local audio** on disconnect/failure
 - **Absolute volume** sync from Rockbox to the Bluetooth stack
@@ -107,7 +107,7 @@ git push origin v0.1.0
 | **aptX** | ✅ Preferred | Auto-selected when the receiver and on-device BlueALSA support it |
 | **SBC** | ✅ Fallback | Always available as the baseline A2DP codec |
 | **LDAC** | ✅ Preferred | Auto-selected when receiver and on-device BlueALSA support it (up to 990kbps) |
-| **aptX HD** | 🔜 Planned | Same auto-negotiation framework; needs on-device library |
+| **aptX HD** | ✅ Preferred | Auto-selected when the receiver and on-device BlueALSA support it |
 
 To check which codecs your device supports, connect via ADB and run:
 
@@ -117,7 +117,7 @@ bluealsa-cli codec /org/bluealsa/hci0/dev_XX_XX_XX_XX_XX_XX/a2dpsrc/sink
 
 ## Known Issues
 
-- Bluetooth connection setup prefers **LDAC** → **aptX** → **SBC**, falling back automatically.
+- Bluetooth connection setup prefers **LDAC** → **aptX HD** → **aptX** → **SBC**, falling back automatically.
 - Bluetooth support is still **experimental** — expect occasional issues with pairing, connecting, or routing audio.
 - **Music playback does work**, but the overall Bluetooth experience is not yet fully reliable.
 - **LDAC** support requires on-device `libldac` libraries and a BlueALSA build with `--enable-ldac`.
