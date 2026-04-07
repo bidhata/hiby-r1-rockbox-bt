@@ -76,7 +76,7 @@ static unsigned int bt_bt_playback_dev_next = 0;
 static char bt_active_codec[16];
 
 static const char *bt_codec_preference[] = {
-    "LDAC", "aptX", "SBC", NULL
+    "LDAC", "aptX-HD", "aptX", "SBC", NULL
 };
 
 static bool bt_wait_for_bluealsa_pcm(const char *mac, int timeout_ticks);
